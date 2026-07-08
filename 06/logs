@@ -1,0 +1,1288 @@
+Aquí tienes el desglose pedagógico de cada ejercicio del CPP06:                                              
+                                                    
+  ---                                                                                                          
+  CPP06 — Los 4 Casts de C++                                                                                   
+                                                                                                               
+  El módulo entero gira en torno a un concepto: los casts explícitos de C++ y por qué existen. Cada ejercicio  
+  fuerza a usar uno distinto.                                                                                  
+                  
+  ---                                                                                                          
+  Ex00 — static_cast (ScalarConverter)
+                                      
+  Lo que enseña: conversión de tipos en tiempo de compilación entre tipos relacionados.
+                                                                                                               
+  La clase no puede instanciarse (constructores privados) — es un patrón utility class. Se recibe una cadena y 
+  se detecta su tipo (char, int, float, double) para luego convertirla a los 4 mediante                        
+  static_cast<tipo>(valor).                                                                                    
+                  
+  Puntos clave a mencionar en la defensa:                                                                      
+  - static_cast es verificado en compile-time: el compilador confirma que la conversión tiene sentido.
+  - Se usa para conversiones numéricas entre tipos escalares relacionados.                                     
+  - Los casos nan/inf son especiales porque no caben en char ni int → impossible.
+  - La diferencia entre char no displayable y impossible: uno existe como carácter ASCII, el otro está fuera de
+   rango.                                                                                                      
+                                                                                                               
+  ---                                                                                                          
+  Ex01 — reinterpret_cast (Serializer)                                                                         
+                                      
+  Lo que enseña: reinterpretación de bits en bruto — lo más "peligroso" de los casts.                          
+                                                                                                               
+  serialize:   Data*    → uintptr_t   (puntero como número entero)
+  deserialize: uintptr_t → Data*      (número entero de vuelta a puntero)                                      
+                  
+  Puntos clave:                                                                                                
+  - Un puntero es una dirección de memoria, y uintptr_t es un entero suficientemente grande para guardarla.
+  - reinterpret_cast no convierte el valor, reinterpreta los mismos bytes como otro tipo.                      
+  - No hay garantía de que el valor intermedio tenga sentido: si la dirección ya no es válida, deserializar da
+  UB.       (Undefined Behavior (Comportamiento Indefinido) )              
+
+
+  El caso concreto: dirección no válida                                                                                                     
+
+  uintptr_t raw;
+                                                                                                                                              
+  {
+      Data temp;                                                                                                                              
+      temp.name = "hola";                                                                                                                   
+      raw = Serializer::serialize(&temp);   // guardas la dirección de temp
+  }                                                                                                                                           
+  // temp muere aquí — se destruye, esa memoria se libera
+                                                                                                                                              
+  Data* recovered = Serializer::deserialize(raw);  // raw sigue teniendo el número                                                            
+  std::cout << recovered->name;                     // UB                                                                                     
+                                                                                                                                              
+  raw sigue siendo un número perfectamente válido — por ejemplo 0x7ffd3a2b. El problema es que lo que había en esa dirección ya no existe.    
+  temp murió al salir del bloque {}.                                                                                                          
+                                                                                                                                              
+  Esa memoria ahora puede contener:                                                                                                         
+  - Los datos de otra variable que el compilador puso ahí
+  - Basura                                                                                                                                    
+  - Los datos originales (por suerte, momentáneamente)
+  - Cualquier cosa                                                                                                                            
+                                                                                                                                              
+  ---                                                                                                                                         
+  Por qué es especialmente peligroso                                                                                                          
+                                                                                                                                              
+  Con static_cast el compilador te protege: si la conversión no tiene sentido, error en compilación. No llegas al runtime.                  
+                                                                                                                                              
+  Con reinterpret_cast el compilador no sabe nada del ciclo de vida del objeto. Solo ve un número. No tiene forma de saber si lo que hay en   
+  esa dirección sigue siendo válido. Te cree ciegamente.                                                                                      
+                                                                                                                                              
+  serialize(&temp)  →  raw = 140720538587344   ← número válido                                                                              
+  temp muere        →  esa memoria ya no es tuya                                                                                              
+  deserialize(raw)  →  recovered apunta a 140720538587344                                                                                     
+  recovered->name   →  lees memoria que no te pertenece  →  UB                                                                                
+                                                                                                                                              
+  ---                                                                                                                                         
+  Qué puede pasar en la práctica                                                                                                              
+                                                                                                                                              
+  ┌──────────────────────────────┬────────────────────────┬────────────────────────────────────────────────┐
+  │             Caso             │        Qué ves         │                    Por qué                     │                                  
+  ├──────────────────────────────┼────────────────────────┼────────────────────────────────────────────────┤                                
+  │ El programa funciona         │ Los datos originales   │ La memoria no se reutilizó todavía             │
+  ├──────────────────────────────┼────────────────────────┼────────────────────────────────────────────────┤
+  │ El programa imprime basura   │ Datos de otra variable │ La memoria fue reutilizada                     │                                  
+  ├──────────────────────────────┼────────────────────────┼────────────────────────────────────────────────┤                                  
+  │ Segfault                     │ Crash                  │ La dirección ya está mapeada como no accesible │                                  
+  ├──────────────────────────────┼────────────────────────┼────────────────────────────────────────────────┤                                  
+  │ Bug silencioso meses después │ Datos corruptos        │ UB que no crashea pero corrompe estado         │                                
+  └──────────────────────────────┴────────────────────────┴────────────────────────────────────────────────┘                                  
+                                                                                                                                            
+  El caso más peligroso es el primero — parece que funciona, pero es una bomba de relojería.                                                  
+                                                                                                                                            
+  ---                                                                                                                                         
+  La frase para la defensa                                                                                                                  
+                          
+  ▎ "reinterpret_cast convierte el puntero a número y de vuelta, pero no sabe nada del ciclo de vida del objeto. Si el objeto muere antes de 
+  ▎ deserializar, el número sigue siendo válido pero la memoria que apunta ya no te pertenece. Acceder a ella es comportamiento indefinido —  
+  ▎ el compilador no te avisa y el resultado puede ser cualquier cosa."
+
+
+
+
+
+  - Uso real: protocolos de red, serialización binaria, interfaces C que pasan punteros como void* o long.   
+
+  explicame Uso real: protocolos de red, serialización binaria, interfaces C que pasan punteros como void* o long.                            
+  ⎿  ⧉ Selected 1 lines from ../logs in Visual Studio Code                                                         
+                                                                                                                                              
+● Los tres casos reales de reinterpret_cast                                                                                                 
+                                                                                                                                              
+  ---                                                                                                                                         
+  1. Protocolos de red                                                                                                                        
+                                                                                                                                              
+  Cuando envías datos por la red, todo viaja como bytes crudos — la red no sabe qué es un int o un struct. Tienes que convertir tu estructura
+  a bytes para enviarla, y de bytes a estructura al recibirla.                                                                                
+                  
+  struct Mensaje {                                                                                                                            
+      int    tipo;
+      float  valor;
+      char   texto[20];
+  };                                                                                                                                          
+   
+  Mensaje msg;                                                                                                                                
+  msg.tipo  = 3;  
+  msg.valor = 42.5f;
+
+  // Para enviar por la red: convertir a bytes                                                                                                
+  char* bytes = reinterpret_cast<char*>(&msg);
+  send(socket, bytes, sizeof(Mensaje), 0);   // envías 28 bytes crudos                                                                        
+                                                                                                                                              
+  // Al recibir: convertir bytes de vuelta a struct                                                                                           
+  char buffer[28];                                                                                                                            
+  recv(socket, buffer, 28, 0);
+  Mensaje* recibido = reinterpret_cast<Mensaje*>(buffer);                                                                                     
+   
+  Los bytes no cambian. Solo cambias cómo el programa los interpreta.                                                                         
+                  
+  ---                                                                                                                                         
+  2. Serialización binaria
+                                                                                                                                              
+  Guardar datos en un fichero de forma compacta — no como texto ("42") sino como los bytes exactos del valor en memoria.
+                                                                                                                                              
+  int numero = 2025;
+                                                                                                                                              
+  // Guardar en fichero como bytes crudos
+  char* bytes = reinterpret_cast<char*>(&numero);                                                                                             
+  fichero.write(bytes, sizeof(int));   // escribe 4 bytes: 0xE9 0x07 0x00 0x00                                                                
+                                                                                                                                              
+  // Leer del fichero                                                                                                                         
+  char buffer[4];                                                                                                                             
+  fichero.read(buffer, sizeof(int));                                                                                                          
+  int* recuperado = reinterpret_cast<int*>(buffer);
+  // *recuperado == 2025                                                                                                                      
+                                                                                                                                              
+  Esto ocupa 4 bytes en disco. Guardarlo como texto "2025" ocupa 4 bytes también en este caso, pero "2025000" ocupa 7 bytes — los bytes crudos
+   siempre ocupan exactamente sizeof(tipo).                                                                                                   
+                                                                                                                                              
+  ---             
+  3. Interfaces C que pasan punteros como void* o long
+                                                                                                                                              
+  Este es el más frecuente en la práctica. Muchas APIs de C (sistemas operativos, librerías antiguas) fueron diseñadas antes de que existieran
+   los templates. Para ser genéricas, pasan punteros disfrazados de void* o long.                                                             
+                  
+  Ejemplo real — pthreads (hilos en Linux):                                                                                                   
+                  
+  // La API de C solo acepta void* como argumento al hilo                                                                                     
+  void* hilo_funcion(void* arg)                                                                                                               
+  {
+      // arg es en realidad un int*, hay que recuperarlo                                                                                      
+      int* valor = reinterpret_cast<int*>(arg);                                                                                               
+      std::cout << *valor << std::endl;
+      return NULL;                                                                                                                            
+  }               
+                                                                                                                                              
+  int main()      
+  {
+      int dato = 42;
+      pthread_t hilo;
+      // pthread solo acepta void* — disfrazamos nuestro int*
+      pthread_create(&hilo, NULL, hilo_funcion, reinterpret_cast<void*>(&dato));                                                              
+      pthread_join(hilo, NULL);                                                                                                               
+  }                                                                                                                                           
+                                                                                                                                              
+  Ejemplo real — callbacks de GUI (GTK, Qt antiguo):                                                                                          
+   
+  // GTK pasa datos de usuario como gpointer (= void*)                                                                                        
+  void on_click(GtkWidget* widget, gpointer data)                                                                                             
+  {                                                                                                                                           
+      MiVentana* ventana = reinterpret_cast<MiVentana*>(data);                                                                                
+      ventana->actualizar();                                                                                                                  
+  }               
+                                                                                                                                              
+  // Al conectar la señal                                                                                                                     
+  g_signal_connect(boton, "clicked", G_CALLBACK(on_click),
+                   reinterpret_cast<gpointer>(mi_ventana));                                                                                   
+                                                                                                                                              
+  ---
+  El patrón común de los tres                                                                                                                 
+                                                                                                                                              
+  Tu tipo (Data*, int*, struct*)
+          ↓  reinterpret_cast                                                                                                                 
+  Tipo genérico (char*, void*, uintptr_t, long)
+          ↓  viaja por la red / se guarda en disco / pasa por API de C                                                                        
+  Tu tipo de vuelta (reinterpret_cast en el receptor)                                                                                         
+                                                                                                                                              
+  Exactamente lo mismo que hace ex01 con Data* → uintptr_t → Data*.                                                                           
+                                                                                                                                              
+  ---                                                                                                                                         
+  Para la defensa, si te preguntan para qué sirve esto en la vida real
+                                                                                                                                              
+  ▎ "Se usa cuando tienes que pasar datos a través de una interfaz que no conoce tu tipo — una red que solo entiende bytes, un fichero que 
+  ▎ guarda bits, o una API de C que acepta void*. reinterpret_cast te permite convertir tu tipo a ese formato genérico y recuperarlo en el    
+  ▎ otro extremo, sabiendo que los bytes no han cambiado."
+                                                             
+                                                                                                               
+  ---                                                                                                          
+  Ex02 — dynamic_cast (Identify)
+                                                                                                               
+  Lo que enseña: identificación de tipo en runtime dentro de una jerarquía polimórfica (RTTI).
+                                                                                                               
+  Dado un Base* que apunta a A, B o C, tienes que identificar cuál es sin saber el tipo en compilación.        
+                                                                                                               
+  La diferencia crucial entre las dos sobrecargas:                                                             
+                  
+  ┌───────────────────┬─────────────────────┬──────────────────┐                                               
+  │      Versión      │     Cast falla      │  Comportamiento  │
+  ├───────────────────┼─────────────────────┼──────────────────┤
+  │ identify(Base* p) │ devuelve nullptr    │ comprueba con if │
+  ├───────────────────┼─────────────────────┼──────────────────┤
+  │ identify(Base& p) │ lanza std::bad_cast │ usa try/catch    │                                               
+  └───────────────────┴─────────────────────┴──────────────────┘
+                                                                                                               
+  Puntos clave:                                                                                                
+  - dynamic_cast requiere al menos una función virtual en la clase base (por eso ~Base() es virtual) — sin RTTI
+   activada, no funciona.                                                                                      
+  - Es el único cast que puede fallar en runtime de forma segura.
+  - Con punteros usas el retorno nulo; con referencias no hay "referencia nula" posible, de ahí la excepción.  
+  - Costoso comparado con los otros: recorre la vtable buscando el tipo real.                                  
+                                                                                                               
+  ---                                                                                                          
+  Resumen para la defensa                                                                                      
+                                                                                                               
+  ▎ "El módulo enseña que C++ tiene 4 casts explícitos por una razón: cada uno expresa una intención distinta y
+  ▎  tiene un nivel de seguridad diferente. static_cast es seguro en compilación, reinterpret_cast es          
+  ▎ reinterpretación pura de bytes sin ninguna garantía, y dynamic_cast es seguro en runtime para jerarquías 
+  ▎ polimórficas. Evitar los casts estilo C (tipo)valor es importante porque ocultan cuál de estos tres        
+  ▎ mecanismos se está usando realmente."
+
+✻ Cogitated for 36s                 
+                                                                                          
+※ recap: CPP06 covers the four C++ explicit casts. You reviewed the pedagogical goals of each exercise to      
+  explain in your defense. No pending action needed. (disable recaps in /config)                               
+                                                                                                               
+❯ explicame el subject con detalle                                                                             
+  C++ - Module 06                                                                                              
+  C++ casts                                                                                                    
+  Summary: This document contains the exercises for Module 06 of the C++ modules.                              
+  Version: 8.1                                                                                                 
+  Contents                                                                                                     
+  I Introduction 2                                                                                             
+  II General rules 3                                                                                           
+  III Additional Rule 6                                                                                        
+  IV AI Instructions 7                                                                                         
+  V Exercise 00: Conversion of scalar types 9                                                                  
+  VI Exercise 01: Serialization 12                                                                             
+  VII Exercise 02: Identify real type 13                                                                       
+  VIII Submission and Peer Evaluation 14                                                                       
+  1                                                                                                            
+  Chapter I                                                                                                    
+  Introduction                                                                                                 
+  C++ is a general-purpose programming language created by Bjarne Stroustrup as an extension of the C          
+  programming language, often referred to as "C with Classes" (source:                                         
+  Wikipedia).                                                                                                  
+  The goal of these modules is to introduce you to Object-Oriented Programming.                                
+  This will be the starting point of your C++ journey. Many languages are recommended                          
+  for learning OOP, but we chose C++ since it is derived from your old friend, C. As C++                       
+  is a complex language, your code will adhere to the C++98 standard to keep things                            
+  simple.                                                                                                      
+  We acknowledge that modern C++ differs significantly in many aspects. If you want                            
+  to become a proficient C++ developer, it will be up to you to explore further beyond the                     
+  42 Common Core!                                                                                              
+  2                                                                                                            
+  Chapter II                                                                                                   
+  General rules                                                                                                
+  Compiling                                                                                                    
+  • Compile your code with c++ and the flags -Wall -Wextra -Werror                                             
+  • Your code should still compile if you add the flag -std=c++98                                              
+  Formatting and naming conventions                                                                            
+  • The exercise directories will be named this way: ex00, ex01, ... , exn                                     
+  • Name your files, classes, functions, member functions and attributes as required in                        
+  the guidelines.                                                                                              
+  • Write class names in UpperCamelCase format. Files containing class code will                               
+  always be named according to the class name. For instance:                                                   
+  ClassName.hpp/ClassName.h, ClassName.cpp, or ClassName.tpp. Then, if you                                     
+  have a header file containing the definition of a class "BrickWall" standing for a                           
+  brick wall, its name will be BrickWall.hpp.                                                                  
+  • Unless specified otherwise, every output message must end with a newline character                         
+  and be displayed to the standard output.                                                                     
+  • Goodbye Norminette! No coding style is enforced in the C++ modules. You can                                
+  follow your favorite one. But keep in mind that code your peer evaluators can’t                              
+  understand is code they can’t grade. Do your best to write clean and readable code.                          
+  Allowed/Forbidden                                                                                            
+  You are not coding in C anymore. Time to C++! Therefore:                                                     
+  • You are allowed to use almost everything from the standard library. Thus, instead                          
+  of sticking to what you already know, it would be smart to use the C++-ish versions                          
+  of the C functions you are used to as much as pos                                                            
+  ──── (168 lines hidden) ──────────────────────────────────────────────────────────────────────────────────── 
+  ss works as expected.                                                                                        
+  You must create a non-empty (meaning it has data members) Data structure.                                    
+  Use serialize() on the address of the Data object and pass its return value to                               
+  deserialize(). Then, ensure the return value of deserialize() compares equal to the                          
+  original pointer.                                                                                            
+  Do not forget to turn in the files of your Data structure.                                                   
+  12                                                                                                           
+  Chapter VII                                                                                                  
+  Exercise 02: Identify real type                                                                              
+  Exercise: 02                                                                                                 
+  Identify real type                                                                                           
+  Directory: ex02/                                                                                             
+  Files to Submit: Makefile, *.cpp, *.{h, hpp}                                                                 
+  Forbidden: std::typeinfo                                                                                     
+  Implement a Base class that has a public virtual destructor only. Create three empty                         
+  classes A, B, and C, that publicly inherit from Base.                                                        
+  These four classes don’t have to be designed in the Orthodox                                                 
+  Canonical Form.                                                                                              
+  Implement the following functions:                                                                           
+  Base * generate(void);                                                                                       
+  It randomly instantiates A, B, or C and returns the instance as a Base pointer. Feel free                    
+  to use anything you like for the random choice implementation.                                               
+  void identify(Base* p);                                                                                      
+  It prints the actual type of the object pointed to by p: "A", "B", or "C".                                   
+  void identify(Base& p);                                                                                      
+  It prints the actual type of the object referenced by p: "A", "B", or "C". Using a pointer                   
+  inside this function is forbidden.                                                                           
+  Including the typeinfo header is forbidden.                                                                  
+  Write a program to test that everything works as expected.                                                   
+  13                                                                                                           
+  Chapter VIII                                                                                                 
+  Submission and Peer Evaluation                                                                               
+  Submit your assignment to your Git repository as usual. Only the work inside your repository will be         
+  evaluated during the defense. Don’t hesitate to double-check the names of                                    
+  your folders and files to ensure they are correct.                                                           
+  During the evaluation, a brief modification of the project may occasionally be requested. This could involve 
+   a minor behavior change, a few lines of code to write or                                                    
+  rewrite, or an easy-to-add feature.                                                                          
+  While this step may not be applicable to every project, you must be prepared for it                          
+  if it is mentioned in the evaluation guidelines.                                                             
+  This step is meant to verify your actual understanding of a specific part of the project.                    
+  The modification can be performed in any development environment you choose (e.g.,                           
+  your usual setup), and it should be feasible within a few minutes — unless a specific                        
+  timeframe is defined as part of the evaluation.                                                              
+  You can, for example, be asked to make a small update to a function or script, modify a                      
+  display, or adjust a data structure to store new information, etc.                                           
+  The details (scope, target, etc.) will be specified in the evaluation guidelines and may                     
+  vary from one evaluation to another for the same project.                                                    
+  14                                                                                                           
+
+● CPP06 — Análisis detallado del subject    
+                                                      
+  ---
+  Regla global del módulo (Chapter III)                                                                        
+                                                                                                               
+  ▎ "For each exercise, type conversion must be handled using a specific type of casting. Your choice will be  
+  ▎ reviewed during the defense."                                                                              
+                                                                                                             
+  Esta es la regla más importante. Cada ejercicio está diseñado para que uses UN cast específico. El evaluador 
+  va a preguntarte por qué usaste ese cast y no otro. No es opcional ni decorativo.                          
+                                                                                                               
+  ---                                                                                                        
+  Ex00 — ScalarConverter
+
+  Qué pide exactamente
+
+  Una clase con un único método estático convert(string) que:                                                  
+  1. Detecta qué tipo es el literal que llega como string
+  2. Lo parsea a su tipo real                                                                                  
+  3. Lo convierte a los otros 3 tipos mediante static_cast                                                   
+  4. Imprime los 4                                                                                             
+                                                                                                               
+  La clase no puede instanciarse — esto se consigue con constructores privados (forma canónica ortodoxa, aunque
+   no sea instanciable).                                                                                       
+                                                                                                               
+  Los tipos de input que debes manejar                                                                         
+                                                                                                             
+  ┌──────────────────┬────────────────────────────────────────────┬────────────────────────────────────────┐   
+  │       Tipo       │                  Ejemplos                  │           Forma de detectar            │ 
+  ├──────────────────┼────────────────────────────────────────────┼────────────────────────────────────────┤   
+  │ char             │ 'a', 'c'                                   │ cadena de longitud 3, con comillas     │
+  │                  │                                            │ simples                                │   
+  ├──────────────────┼────────────────────────────────────────────┼────────────────────────────────────────┤   
+  │ int              │ 0, -42, 42                                 │ solo dígitos con signo opcional        │   
+  ├──────────────────┼────────────────────────────────────────────┼────────────────────────────────────────┤   
+  │ float            │ 0.0f, -4.2f                                │ termina en f, tiene punto decimal      │   
+  ├──────────────────┼────────────────────────────────────────────┼────────────────────────────────────────┤ 
+  │ double           │ 0.0, -4.2                                  │ tiene punto decimal, sin f             │   
+  ├──────────────────┼────────────────────────────────────────────┼────────────────────────────────────────┤ 
+  │ pseudo-literales │ nan, nanf, +inf, -inf, +inff, -inff, inf,  │ casos especiales hardcodeados          │   
+  │                  │ inff                                       │                                        │ 
+  └──────────────────┴────────────────────────────────────────────┴────────────────────────────────────────┘   
+                                                                                                             
+  Las reglas de "impossible" vs "Non displayable"                                                              
+  
+  - impossible: el valor está fuera del rango del tipo destino (overflow), o es nan/inf que no tiene           
+  representación en char/int.                                                                                
+  - Non displayable: el valor SÍ cabe en un char (0–127) pero es un carácter de control no imprimible (ASCII < 
+  32, o 127 = DEL). El carácter existe, simplemente no se puede mostrar en pantalla.                           
+  
+  ./convert 0     → char: Non displayable  (ASCII 0 = null, existe pero no se muestra)                         
+  ./convert 42.0f → char: '*'              (ASCII 42 = *, displayable)                                         
+  ./convert nan   → char: impossible       (nan no tiene valor entero)                                         
+                                                                                                               
+  El cast que toca usar: static_cast                                                                           
+                                                                                                               
+  Todo el trabajo de conversión entre los 4 tipos escalares se hace con static_cast<char>(d),                  
+  static_cast<int>(d), etc. Es el cast correcto porque:                                                      
+  - Las conversiones entre tipos numéricos relacionados son verificadas en compile-time.                       
+  - El compilador sabe que double → int es una conversión válida (aunque con posible pérdida).                 
+  
+  ---                                                                                                          
+  Ex01 — Serializer                                                                                          
+                                                                                                               
+  Qué pide exactamente                                                                                       
+
+  Una clase no instanciable con dos métodos estáticos:                                                         
+  
+  uintptr_t serialize(Data* ptr);   // puntero  → entero                                                       
+  Data*     deserialize(uintptr_t); // entero   → puntero                                                      
+  
+  Y una struct Data con al menos un miembro (no puede estar vacía).                                            
+                                                                                                             
+  El test consiste en:                                                                                         
+  Data* original → serialize → uintptr_t → deserialize → Data* resultado                                     
+  Y verificar que original == resultado (misma dirección de memoria).   
+                                                                                                               
+  Qué está demostrando este ejercicio                                                                          
+                                                                                                               
+  Un puntero no es magia: es una dirección de memoria que cabe en un entero. uintptr_t es un entero sin signo  
+  garantizado de ser suficientemente grande para almacenar cualquier puntero en la plataforma.                 
+                                                                                                               
+  Al serializar y deserializar sin que nada haya liberado esa memoria, la dirección sigue siendo válida y los  
+  dos punteros son iguales.
+                                                                                                               
+  El cast que toca usar: reinterpret_cast                                                                    
+
+  reinterpret_cast<uintptr_t>(ptr)   // interpreta los bytes del puntero como entero
+  reinterpret_cast<Data*>(raw)       // interpreta los bytes del entero como puntero                           
+  
+  reinterpret_cast es el único cast que hace esto: no convierte el valor, reinterpreta los mismos bits como un 
+  tipo diferente. No hay ninguna conversión aritmética, solo "mira estos bytes como si fueran este tipo".    
+                                                                                                               
+  ---                                                                                                        
+  Ex02 — Identify real type
+
+  Qué pide exactamente
+
+  Jerarquía de clases:                                                                                         
+  Base (virtual ~Base)
+   ├── A                                                                                                       
+   ├── B                                                                                                     
+   └── C
+        
+  Tres funciones libres (no miembro de clase):
+                                                                                                               
+  Base* generate();        // crea A, B o C aleatoriamente, devuelve Base*
+  void identify(Base* p);  // imprime "A", "B" o "C"                                                           
+  void identify(Base& p);  // imprime "A", "B" o "C" — SIN usar punteros internamente                          
+                                                                                                               
+  Restricciones explícitas:                                                                                    
+  - Prohibido incluir <typeinfo> (o sea, prohibido typeid()).                                                  
+  - En identify(Base& p) está prohibido usar punteros.                                                         
+  - Las 4 clases NO necesitan forma canónica ortodoxa (el subject lo dice explícitamente).                   
+                                                                                                               
+  Por qué el destructor virtual es obligatorio                                                                 
+   
+  Sin virtual ~Base(), no hay vtable, y sin vtable no hay RTTI (Run-Time Type Information). dynamic_cast       
+  necesita RTTI para funcionar. Si el destructor no es virtual, dynamic_cast simplemente no compila o da     
+  comportamiento indefinido.                                                                                   
+                                                                                                             
+  La diferencia crítica entre las dos sobrecargas                                                              
+   
+  Con puntero — fallo silencioso:                                                                              
+  void identify(Base* p) {                                                                                   
+      if (dynamic_cast<A*>(p))      // fallo → devuelve nullptr                                                
+          std::cout << "A\n";                                                                                
+      else if (dynamic_cast<B*>(p))                                                                            
+          std::cout << "B\n";                                                                                  
+      ...                                                                                                      
+  }                                                                                                            
+                                                                                                             
+  Con referencia — fallo con excepción:
+  void identify(Base& p) {
+      try {               
+          (void)dynamic_cast<A&>(p);  // fallo → lanza std::bad_cast                                           
+          std::cout << "A\n"; return;                               
+      } catch (...) {}                                                                                         
+      ...                                                                                                      
+  }      
+                                                                                                               
+  No existe una "referencia nula" en C++, así que el fallo de dynamic_cast sobre una referencia no puede     
+  devolver "nada" — tiene que lanzar.                                                                          
+   
+  El cast que toca usar: dynamic_cast                                                                          
+                                                                                                             
+  Es el único cast que puede hacer downcasting seguro en runtime dentro de una jerarquía polimórfica. Consulta 
+  la vtable del objeto para saber su tipo real, independientemente del tipo estático del puntero/referencia con
+   el que lo estamos mirando.                                                                                  
+                                                                                                             
+  ---
+  Lo que el evaluador puede preguntarte
+                                                                                                               
+  El subject avisa de que puede pedirte modificar el código en la defensa. Cosas típicas:
+                                                                                                               
+  - "Añade soporte para el literal '\\n'" (ex00)                                                               
+  - "¿Qué pasa si le paso un string vacío?" (ex00)                                                             
+  - "¿Por qué no usaste static_cast en el ex01?" (ex01)                                                        
+  - "¿Qué pasa si llamas a identify con un nullptr?" (ex02)                                                    
+  - "Cambia generate() para que use srand con una semilla fija" (ex02)                                         
+                                                                                                               
+  La pregunta clave que casi siempre aparece: "¿Por qué usaste ese cast específico y no otro?"                 
+                                                                                                               
+✻ Cooked for 38s                                                                                               
+                                                                                                             
+❯ estas anidaciones de else if ¿no pueden arreglarse con punteros a fuciones o algo mejor?                     
+  ⎿  ⧉ Selected 56 lines from ex00/ScalarConverter.cpp in Visual Studio Code                                   
+                                                                                                               
+● La cadena de else if no es el problema en sí — el problema es que está haciendo dos cosas a la vez: detectar 
+  el tipo Y parsear. La mejora más limpia es separarlas:                                                       
+                                                                                                               
+  Opción 1 — Enum + switch (lo más claro para C++98):                                                          
+                                                                                                               
+  enum LiteralType { CHAR_LIT, INT_LIT, FLOAT_LIT, DOUBLE_LIT, SPECIAL_LIT, INVALID_LIT };                     
+                                                                                                               
+  static LiteralType detectType(const std::string& s)
+  {                                                                                                            
+      if (isCharLiteral(s)) return CHAR_LIT;
+      if (isSpecial(s))     return SPECIAL_LIT;                                                                
+      if (isFloat(s))       return FLOAT_LIT;
+      if (isDouble(s))      return DOUBLE_LIT;                                                                 
+      if (isInt(s))         return INT_LIT;                                                                    
+      return INVALID_LIT;
+  }                                                                                                            
+                  
+  void ScalarConverter::convert(const std::string& literal)
+  {
+      double d;
+                                                                                                               
+      switch (detectType(literal))
+      {                                                                                                        
+          case CHAR_LIT:   d = static_cast<double>(literal[1]); break;
+          case FLOAT_LIT:  d = strtod(literal.substr(0, literal.length() - 1).c_str(), NULL); break;
+          case DOUBLE_LIT: d = strtod(literal.c_str(), NULL); break;                                           
+          case INT_LIT:    d = static_cast<double>(strtol(literal.c_str(), NULL, 10)); break;
+          case SPECIAL_LIT: printSpecial(literal); return;                                                     
+          default:          printImpossible(); return;
+      }                                                                                                        
+                  
+      printChar(d);                                                                                            
+      printInt(d);
+      printFloat(d);
+      printDouble(d);
+  }
+
+  ¿Por qué no punteros a función?                                                                              
+  
+  Los punteros a función tendrían sentido si todos los casos siguieran la misma firma — pero no la siguen:     
+  - SPECIAL_LIT e INVALID_LIT hacen un return anticipado.
+  - El parsing de cada tipo necesita argumentos distintos.                                                     
+                                                          
+  Un array de {predicate, parser} te obliga a forzar todos los casos en la misma forma, y acabas con más       
+  complejidad para el mismo resultado.                                                                         
+                                                                                                               
+  El beneficio real del enum+switch es de lectura: ahora detectType responde "¿qué es esto?" y convert responde
+   "¿qué hago con ello?" — responsabilidades separadas, sin mezclar detección con parsing en el mismo bloque.
+                                                                                                               
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                             
+───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts                                                                                   ⧉ In logs  
+                                                                                                               
+                                                                                                               
+                                                                                                               
+                                                                                                                
+● Todo está correcto. Aquí tienes las respuestas para cada punto de la hoja:
+                                                                                                                
+  ---                                                                                           
+  Ex00 — Conversion of scalar types                                                                             
+                                                                                                                
+  "Did the student use static_cast to convert values?"                                                          
+                                                                                                                
+  Sí. El cast de conversión entre tipos escalares se hace siempre con static_cast. Puedes señalar directamente: 
+                                                                                                                
+  // ScalarConverter.cpp:62                                                                                     
+  std::cout << "char: '" << static_cast<char>(d) << "'" << std::endl;                                           
+  // :71                                                                                                        
+  std::cout << "int: " << static_cast<int>(d) << std::endl;                                                     
+  // :76                                                                                                        
+  float f = static_cast<float>(d);                                                                              
+  // También al parsear char e int:
+  d = static_cast<double>(literal[1]);        // línea 99                                                       
+  d = static_cast<double>(strtol(...));       // línea 46                                                       
+                                                                                                                
+  "We'll accept implicit casts for promotion casts only" — si el evaluador pregunta por strtod dando un double  
+  directamente sin cast explícito, es una promoción implícita aceptada (líneas 129 y 125).
+                                                                                                                
+  ---             
+  Ex01 — Serialization
+
+  "reinterpret_cast should be used twice"
+
+  Puedes abrir Serializer.cpp y señalar las dos líneas:                                                         
+  
+  // Primera: Data* → uintptr_t                                                                                 
+  uintptr_t Serializer::serialize(Data* ptr) {
+      return reinterpret_cast<uintptr_t>(ptr);                                                                  
+  }
+                                                                                                                
+  // Segunda: uintptr_t → Data*                                                                                 
+  Data* Serializer::deserialize(uintptr_t raw) {
+      return reinterpret_cast<Data*>(raw);                                                                      
+  }               
+
+  "The final data struct should be usable"                                                                      
+  
+  El main demuestra exactamente eso — después de deserializar se accede a recovered->name y recovered->value con
+   éxito, y se imprime Pointers match: yes.
+                                                                                                                
+  Por qué reinterpret_cast y no otro: es el único cast que reinterpreta los bytes del puntero como un entero sin
+   hacer ninguna conversión aritmética. static_cast no permite convertir entre punteros y enteros.
+                                                                                                                
+  ---             
+  Ex02 — Identify real type
+                                                                                                                
+  "void identify(Base* p) should check if the cast return is NULL"
+                                                                                                                
+  // Base.cpp:20-27
+  void identify(Base* p) {                                                                                      
+      if (dynamic_cast<A*>(p))      // NULL → false, continúa
+          std::cout << "A\n";                                                                                   
+      else if (dynamic_cast<B*>(p)) // NULL → false, continúa
+          std::cout << "B\n";                                                                                   
+      else if (dynamic_cast<C*>(p))
+          std::cout << "C\n";                                                                                   
+  }               
+
+  Con puntero, dynamic_cast devuelve nullptr si el tipo no coincide — la condición del if lo comprueba          
+  implícitamente.
+                                                                                                                
+  "void identify(Base& p) should use try/catch"                                                                 
+  
+  // Base.cpp:32-48                                                                                             
+  void identify(Base& p) {
+      try {
+          (void)dynamic_cast<A&>(p);  // lanza std::bad_cast si falla
+          std::cout << "A\n"; return;                                                                           
+      } catch (const std::exception&) {}
+                                                                                                                
+      try {       
+          (void)dynamic_cast<B&>(p);                                                                            
+          std::cout << "B\n"; return;
+      } catch (const std::exception&) {}
+      // ...                                                                                                    
+  }
+                                                                                                                
+  Con referencia no hay "referencia nula" en C++, así que el fallo lanza std::bad_cast — de ahí el try/catch.   
+  
+  "The <typeinfo> header must not appear anywhere"                                                              
+                  
+  Puedes hacer un grep en directo:                                                                              
+  grep -r "typeinfo" ex02/
+  # → sin resultados                                                                                            
+                    
+  typeid() está prohibido y no se usa en ningún sitio. La identificación se hace puramente mediante
+  dynamic_cast.                                                                                                 
+  
+※ recap: Reviewing CPP06 for the defense. All three exercises are correct and ready. Next: practice explaining  
+  out loud why each cast was chosen. (disable recaps in /config)  
+
+  que son estos conceptos We'll accept implicit casts for promotion casts only                                  
+                                                                               
+● Son conceptos de sistemas de tipos en lenguajes de programación / diseño de compiladores:                     
+                                                                                                              
+  Implicit cast (cast implícito)                                                                                
+  Una conversión de tipo que ocurre automáticamente, sin que el programador escriba código explícito para ello.
+  El compilador/runtime la hace solo.                                                                           
+                                                                                                              
+  int x = 5;                                                                                                    
+  double y = x;  // cast implícito: int → double, no escribiste (double)x
+                                                                                                                
+  Promotion cast (cast de promoción)                                                                            
+  Una conversión de un tipo "más pequeño" o "menos preciso" a uno "más grande" o "más preciso". No hay pérdida  
+  de información.                                                                                               
+                  
+  int  → long                                                                                                   
+  float → double  
+  char  → int
+
+  ---
+  La frase completa: "We'll accept implicit casts for promotion casts only"
+                                                                                                                
+  Significa que el sistema de tipos permitirá conversiones automáticas (sin syntax explícita) solo cuando la 
+  conversión sea una promoción (no hay pérdida de datos).                                                       
+                  
+  Lo que no se permitiría de forma implícita:                                                                   
+                  
+  double x = 3.14;                                                                                              
+  int y = x;  // ERROR: narrowing cast (pierde decimales) → requiere cast explícito
+                                                                                                                
+  Es una decisión de diseño que balancea:
+  - Conveniencia: no tienes que escribir casts todo el tiempo                                                   
+  - Seguridad: solo se permiten automáticamente las conversiones que no pierden información      
+
+  Write(/sgoinfre/students/mvigara-/CPP/06/test_bytes.cpp)                                                                                    
+  ⎿  Wrote 47 lines to ../test_bytes.cpp          
+       1 #include <iostream>                                                                                                                  
+       2 #include <fstream>                                                                                                                   
+       3 #include <cstring>                                                                                                                   
+       4                                                                                                                                      
+       5 struct Mensaje {                                                                                                                     
+       6        int  tipo;                                                                                                                  
+       7        char texto[20];                                                                                                               
+       8 };                                                                                                                                   
+       9                                                                                                                                      
+      10 int main()                                                                                                                           
+     … +37 lines (ctrl+o to expand)                                                                                                           
+                                                                                                                                              
+● Bash(cd /sgoinfre/students/mvigara-/CPP/06 && c++ -Wall -Wextra -Werror -std=c++98 test_bytes.cpp -o test_bytes && ./test_bytes)
+  ⎿  Escrito en disco:
+       tipo  : 7                                                                                                                              
+       texto : HOLA                                                                                                                           
+     … +7 lines (ctrl+o to expand)                                                                                                            
+                                                                                                                                              
+● Bash(xxd mensaje.bin)                                                                                                      
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........                                                                      
+     00000010: 0000 0000 0000 0000                      ........                                                                              
+                                                                                                                                              
+● Funciona. Mira lo que hay dentro del fichero:                                                                                               
+                                                                                                                                              
+  0700 0000   →  el int 7  (4 bytes, little-endian)                                                                                           
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)                                                                                                
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]                                                                              
+                                                                                                                                              
+  Ahí está el reinterpret_cast en acción:                                                                                                     
+                                                                                                                                              
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos                                                                
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual                                                          
+                                                                                                                                              
+  // al leer:                                                                                                                                 
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct                                                                
+                                                                                                                                              
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y  
+  el uintptr_t.
+                                                                                                                                              
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en 
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.
+                                                                                                                                              
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯                                                                                                                                             
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+● Bash(xxd mensaje.bin)
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........
+     00000010: 0000 0000 0000 0000                      ........
+
+● Funciona. Mira lo que hay dentro del fichero:
+
+  0700 0000   →  el int 7  (4 bytes, little-endian)
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]
+
+  Ahí está el reinterpret_cast en acción:
+
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual
+
+  // al leer:
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct
+
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y
+  el uintptr_t.
+
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+       tipo  : 7
+       texto : HOLA
+     … +7 lines (ctrl+o to expand)
+
+● Bash(xxd mensaje.bin)
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........
+     00000010: 0000 0000 0000 0000                      ........
+
+● Funciona. Mira lo que hay dentro del fichero:
+
+  0700 0000   →  el int 7  (4 bytes, little-endian)
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]
+
+  Ahí está el reinterpret_cast en acción:
+
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual
+
+  // al leer:
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct
+
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y
+  el uintptr_t.
+
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+     … +37 lines (ctrl+o to expand)
+
+● Bash(cd /sgoinfre/students/mvigara-/CPP/06 && c++ -Wall -Wextra -Werror -std=c++98 test_bytes.cpp -o test_bytes && ./test_bytes)
+  ⎿  Escrito en disco:
+       tipo  : 7
+       texto : HOLA
+     … +7 lines (ctrl+o to expand)
+
+● Bash(xxd mensaje.bin)
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........
+     00000010: 0000 0000 0000 0000                      ........
+
+● Funciona. Mira lo que hay dentro del fichero:
+
+  0700 0000   →  el int 7  (4 bytes, little-endian)
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]
+
+  Ahí está el reinterpret_cast en acción:
+
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual
+
+  // al leer:
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct
+
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y
+  el uintptr_t.
+
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+  ⎿  Wrote 47 lines to ../test_bytes.cpp
+       1 #include <iostream>
+       2 #include <fstream>
+       3 #include <cstring>
+       4
+       5 struct Mensaje {
+       6        int  tipo;
+       7        char texto[20];
+       8 };
+       9
+      10 int main()
+     … +37 lines (ctrl+o to expand)
+
+● Bash(cd /sgoinfre/students/mvigara-/CPP/06 && c++ -Wall -Wextra -Werror -std=c++98 test_bytes.cpp -o test_bytes && ./test_bytes)
+  ⎿  Escrito en disco:
+       tipo  : 7
+       texto : HOLA
+     … +7 lines (ctrl+o to expand)
+
+● Bash(xxd mensaje.bin)
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........
+     00000010: 0000 0000 0000 0000                      ........
+
+● Funciona. Mira lo que hay dentro del fichero:
+
+  0700 0000   →  el int 7  (4 bytes, little-endian)
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]
+
+  Ahí está el reinterpret_cast en acción:
+
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual
+
+  // al leer:
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct
+
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y
+  el uintptr_t.
+
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+※ recap: Revisando CPP06 para entrega: corregidos dos bugs en ex00 (char sin comillas y string vacío), creados eval.md y explicaciones de
+  defensa. Siguiente: repasar ex02 con la hoja de evaluación antes de entregar.
+
+❯ me puedes dar un main que testee esto de crear el archivo de bytes crudos pasado el mensaje HOLA                                            
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Write(/sgoinfre/students/mvigara-/CPP/06/test_bytes.cpp)
+  ⎿  Wrote 47 lines to ../test_bytes.cpp
+       1 #include <iostream>
+       2 #include <fstream>
+       3 #include <cstring>
+       4
+       5 struct Mensaje {
+       6        int  tipo;
+       7        char texto[20];
+       8 };
+       9
+      10 int main()
+     … +37 lines (ctrl+o to expand)
+
+● Bash(cd /sgoinfre/students/mvigara-/CPP/06 && c++ -Wall -Wextra -Werror -std=c++98 test_bytes.cpp -o test_bytes && ./test_bytes)
+  ⎿  Escrito en disco:
+       tipo  : 7
+       texto : HOLA
+     … +7 lines (ctrl+o to expand)
+
+● Bash(xxd mensaje.bin)
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........
+     00000010: 0000 0000 0000 0000                      ........
+
+● Funciona. Mira lo que hay dentro del fichero:
+
+  0700 0000   →  el int 7  (4 bytes, little-endian)
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]
+
+  Ahí está el reinterpret_cast en acción:
+
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual
+
+  // al leer:
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct
+
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y
+  el uintptr_t.
+
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+
+  ---
+  Para la defensa, si te preguntan para qué sirve esto en la vida real
+
+  ▎ "Se usa cuando tienes que pasar datos a través de una interfaz que no conoce tu tipo — una red que solo entiende bytes, un fichero que
+  ▎ guarda bits, o una API de C que acepta void*. reinterpret_cast te permite convertir tu tipo a ese formato genérico y recuperarlo en el
+  ▎ otro extremo, sabiendo que los bytes no han cambiado."
+
+※ recap: Revisando CPP06 para entrega: corregidos dos bugs en ex00 (char sin comillas y string vacío), creados eval.md y explicaciones de
+  defensa. Siguiente: repasar ex02 con la hoja de evaluación antes de entregar.
+
+❯ me puedes dar un main que testee esto de crear el archivo de bytes crudos pasado el mensaje HOLA                                            
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Write(/sgoinfre/students/mvigara-/CPP/06/test_bytes.cpp)
+  ⎿  Wrote 47 lines to ../test_bytes.cpp
+       1 #include <iostream>
+       2 #include <fstream>
+       3 #include <cstring>
+       4
+       5 struct Mensaje {
+       6        int  tipo;
+       7        char texto[20];
+       8 };
+       9
+      10 int main()
+     … +37 lines (ctrl+o to expand)
+
+● Bash(cd /sgoinfre/students/mvigara-/CPP/06 && c++ -Wall -Wextra -Werror -std=c++98 test_bytes.cpp -o test_bytes && ./test_bytes)
+  ⎿  Escrito en disco:
+       tipo  : 7
+       texto : HOLA
+     … +7 lines (ctrl+o to expand)
+
+● Bash(xxd mensaje.bin)
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........
+     00000010: 0000 0000 0000 0000                      ........
+
+● Funciona. Mira lo que hay dentro del fichero:
+
+  0700 0000   →  el int 7  (4 bytes, little-endian)
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]
+
+  Ahí está el reinterpret_cast en acción:
+
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual
+
+  // al leer:
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct
+
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y
+  el uintptr_t.
+
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+          ↓  viaja por la red / se guarda en disco / pasa por API de C
+  Tu tipo de vuelta (reinterpret_cast en el receptor)
+
+  Exactamente lo mismo que hace ex01 con Data* → uintptr_t → Data*.
+
+  ---
+  Para la defensa, si te preguntan para qué sirve esto en la vida real
+
+  ▎ "Se usa cuando tienes que pasar datos a través de una interfaz que no conoce tu tipo — una red que solo entiende bytes, un fichero que
+  ▎ guarda bits, o una API de C que acepta void*. reinterpret_cast te permite convertir tu tipo a ese formato genérico y recuperarlo en el
+  ▎ otro extremo, sabiendo que los bytes no han cambiado."
+
+※ recap: Revisando CPP06 para entrega: corregidos dos bugs en ex00 (char sin comillas y string vacío), creados eval.md y explicaciones de
+  defensa. Siguiente: repasar ex02 con la hoja de evaluación antes de entregar.
+
+❯ me puedes dar un main que testee esto de crear el archivo de bytes crudos pasado el mensaje HOLA                                            
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Write(/sgoinfre/students/mvigara-/CPP/06/test_bytes.cpp)
+  ⎿  Wrote 47 lines to ../test_bytes.cpp
+       1 #include <iostream>
+       2 #include <fstream>
+       3 #include <cstring>
+       4
+       5 struct Mensaje {
+       6        int  tipo;
+       7        char texto[20];
+       8 };
+       9
+      10 int main()
+     … +37 lines (ctrl+o to expand)
+
+● Bash(cd /sgoinfre/students/mvigara-/CPP/06 && c++ -Wall -Wextra -Werror -std=c++98 test_bytes.cpp -o test_bytes && ./test_bytes)
+  ⎿  Escrito en disco:
+       tipo  : 7
+       texto : HOLA
+     … +7 lines (ctrl+o to expand)
+
+● Bash(xxd mensaje.bin)
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........
+     00000010: 0000 0000 0000 0000                      ........
+
+● Funciona. Mira lo que hay dentro del fichero:
+
+  0700 0000   →  el int 7  (4 bytes, little-endian)
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]
+
+  Ahí está el reinterpret_cast en acción:
+
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual
+
+  // al leer:
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct
+
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y
+  el uintptr_t.
+
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+  Tipo genérico (char*, void*, uintptr_t, long)
+          ↓  viaja por la red / se guarda en disco / pasa por API de C
+  Tu tipo de vuelta (reinterpret_cast en el receptor)
+
+  Exactamente lo mismo que hace ex01 con Data* → uintptr_t → Data*.
+
+  ---
+  Para la defensa, si te preguntan para qué sirve esto en la vida real
+
+  ▎ "Se usa cuando tienes que pasar datos a través de una interfaz que no conoce tu tipo — una red que solo entiende bytes, un fichero que
+  ▎ guarda bits, o una API de C que acepta void*. reinterpret_cast te permite convertir tu tipo a ese formato genérico y recuperarlo en el
+  ▎ otro extremo, sabiendo que los bytes no han cambiado."
+
+※ recap: Revisando CPP06 para entrega: corregidos dos bugs en ex00 (char sin comillas y string vacío), creados eval.md y explicaciones de
+  defensa. Siguiente: repasar ex02 con la hoja de evaluación antes de entregar.
+
+❯ me puedes dar un main que testee esto de crear el archivo de bytes crudos pasado el mensaje HOLA                                            
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Write(/sgoinfre/students/mvigara-/CPP/06/test_bytes.cpp)
+  ⎿  Wrote 47 lines to ../test_bytes.cpp
+       1 #include <iostream>
+       2 #include <fstream>
+       3 #include <cstring>
+       4
+       5 struct Mensaje {
+       6        int  tipo;
+       7        char texto[20];
+       8 };
+       9
+      10 int main()
+     … +37 lines (ctrl+o to expand)
+
+● Bash(cd /sgoinfre/students/mvigara-/CPP/06 && c++ -Wall -Wextra -Werror -std=c++98 test_bytes.cpp -o test_bytes && ./test_bytes)
+  ⎿  Escrito en disco:
+       tipo  : 7
+       texto : HOLA
+     … +7 lines (ctrl+o to expand)
+
+● Bash(xxd mensaje.bin)
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........
+     00000010: 0000 0000 0000 0000                      ........
+
+● Funciona. Mira lo que hay dentro del fichero:
+
+  0700 0000   →  el int 7  (4 bytes, little-endian)
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]
+
+  Ahí está el reinterpret_cast en acción:
+
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual
+
+  // al leer:
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct
+
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y
+  el uintptr_t.
+
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+          ↓  reinterpret_cast
+  Tipo genérico (char*, void*, uintptr_t, long)
+          ↓  viaja por la red / se guarda en disco / pasa por API de C
+  Tu tipo de vuelta (reinterpret_cast en el receptor)
+
+  Exactamente lo mismo que hace ex01 con Data* → uintptr_t → Data*.
+
+  ---
+  Para la defensa, si te preguntan para qué sirve esto en la vida real
+
+  ▎ "Se usa cuando tienes que pasar datos a través de una interfaz que no conoce tu tipo — una red que solo entiende bytes, un fichero que
+  ▎ guarda bits, o una API de C que acepta void*. reinterpret_cast te permite convertir tu tipo a ese formato genérico y recuperarlo en el
+  ▎ otro extremo, sabiendo que los bytes no han cambiado."
+
+※ recap: Revisando CPP06 para entrega: corregidos dos bugs en ex00 (char sin comillas y string vacío), creados eval.md y explicaciones de
+  defensa. Siguiente: repasar ex02 con la hoja de evaluación antes de entregar.
+
+❯ me puedes dar un main que testee esto de crear el archivo de bytes crudos pasado el mensaje HOLA                                            
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Write(/sgoinfre/students/mvigara-/CPP/06/test_bytes.cpp)
+  ⎿  Wrote 47 lines to ../test_bytes.cpp
+       1 #include <iostream>
+       2 #include <fstream>
+       3 #include <cstring>
+       4
+       5 struct Mensaje {
+       6        int  tipo;
+       7        char texto[20];
+       8 };
+       9
+      10 int main()
+     … +37 lines (ctrl+o to expand)
+
+● Bash(cd /sgoinfre/students/mvigara-/CPP/06 && c++ -Wall -Wextra -Werror -std=c++98 test_bytes.cpp -o test_bytes && ./test_bytes)
+  ⎿  Escrito en disco:
+       tipo  : 7
+       texto : HOLA
+     … +7 lines (ctrl+o to expand)
+
+● Bash(xxd mensaje.bin)
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........
+     00000010: 0000 0000 0000 0000                      ........
+
+● Funciona. Mira lo que hay dentro del fichero:
+
+  0700 0000   →  el int 7  (4 bytes, little-endian)
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]
+
+  Ahí está el reinterpret_cast en acción:
+
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual
+
+  // al leer:
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct
+
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y
+  el uintptr_t.
+
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯ 
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ? for shortcuts
+          ↓  reinterpret_cast
+  Tipo genérico (char*, void*, uintptr_t, long)
+          ↓  viaja por la red / se guarda en disco / pasa por API de C
+  Tu tipo de vuelta (reinterpret_cast en el receptor)
+
+  Exactamente lo mismo que hace ex01 con Data* → uintptr_t → Data*.
+
+  ---
+  Para la defensa, si te preguntan para qué sirve esto en la vida real
+
+  ▎ "Se usa cuando tienes que pasar datos a través de una interfaz que no conoce tu tipo — una red que solo entiende bytes, un fichero que
+  ▎ guarda bits, o una API de C que acepta void*. reinterpret_cast te permite convertir tu tipo a ese formato genérico y recuperarlo en el
+  ▎ otro extremo, sabiendo que los bytes no han cambiado."
+
+※ recap: Revisando CPP06 para entrega: corregidos dos bugs en ex00 (char sin comillas y string vacío), creados eval.md y explicaciones de
+  defensa. Siguiente: repasar ex02 con la hoja de evaluación antes de entregar.
+
+❯ me puedes dar un main que testee esto de crear el archivo de bytes crudos pasado el mensaje HOLA                                            
+
+  Listed 1 directory (ctrl+o to expand)
+
+● Write(/sgoinfre/students/mvigara-/CPP/06/test_bytes.cpp)
+  ⎿  Wrote 47 lines to ../test_bytes.cpp
+       1 #include <iostream>
+       2 #include <fstream>
+       3 #include <cstring>
+       4
+       5 struct Mensaje {
+       6        int  tipo;
+       7        char texto[20];
+       8 };
+       9
+      10 int main()
+     … +37 lines (ctrl+o to expand)
+
+● Bash(cd /sgoinfre/students/mvigara-/CPP/06 && c++ -Wall -Wextra -Werror -std=c++98 test_bytes.cpp -o test_bytes && ./test_bytes)
+  ⎿  Escrito en disco:
+       tipo  : 7
+       texto : HOLA
+     … +7 lines (ctrl+o to expand)
+
+● Bash(xxd mensaje.bin)
+  ⎿  00000000: 0700 0000 484f 4c41 0000 0000 0000 0000  ....HOLA........
+     00000010: 0000 0000 0000 0000                      ........
+
+● Funciona. Mira lo que hay dentro del fichero:
+
+  0700 0000   →  el int 7  (4 bytes, little-endian)
+  484f 4c41   →  H O L A  (ASCII: 72 79 76 65)
+  0000 0000   →  los 16 bytes de relleno que sobran del char[20]
+
+  Ahí está el reinterpret_cast en acción:
+
+  char* bytes = reinterpret_cast<char*>(&original);   // struct → bytes crudos
+  fichero.write(bytes, sizeof(Mensaje));               // escribes 24 bytes tal cual
+
+  // al leer:
+  Mensaje* recuperado = reinterpret_cast<Mensaje*>(buffer);  // bytes → struct
+
+  Los bytes no cambian en ningún momento. Solo cambias cómo el programa los interpreta — exactamente lo mismo que hace ex01 con el puntero y
+  el uintptr_t.
+
+※ recap: Estás preparando la defensa de CPP06. Hemos revisado y corregido bugs en ex00 (char sin comillas, string vacío), documentado todo en
+  eval.md, y explorado los conceptos de reinterpret_cast con ejemplos prácticos. Siguiente: repasar ex02 y dynamic_cast.  

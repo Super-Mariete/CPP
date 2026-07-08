@@ -1,0 +1,6 @@
+This is a test file for ex04.
+The word hello appears multiple times.
+hello world
+hello everyone
+Say hello to my little friend!
+But sometimes we say goodbye instead of hello.
