@@ -1,15 +1,3 @@
-/* ************************************************************************** */
-/*                                                                            */
-/*                                                        :::      ::::::::   */
-/*   ClapTrap.cpp                                       :+:      :+:    :+:   */
-/*                                                    +:+ +:+         +:+     */
-/*   By: mvigara- <mvigara-@student.42school.com    +#+  +:+       +#+        */
-/*                                                +#+#+#+#+#+   +#+           */
-/*   Created: 2025/11/01 11:56:48 by mvigara-          #+#    #+#             */
-/*   Updated: 2025/11/02 13:02:04 by mvigara-         ###   ########.fr       */
-/*                                                                            */
-/* ************************************************************************** */
-
 #include "ClapTrap.hpp"
 
 //Constructor ClapTrap() por defecto inicializar name = ?, hitPoints = 10, energyPoints = 10, attackDamage = 0
